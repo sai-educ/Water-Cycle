@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Interactive Water Cycle & Climate Change Simulation</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div id="container">
+        <!-- Header -->
+        <div id="header">
+            <h1>Interactive Water Cycle & Climate Change Simulation</h1>
+            <p>Explore how water moves through Earth's systems and how climate change affects the water cycle</p>
+        </div>
+
+        <!-- Main simulation canvas -->
+        <div id="simulation-container">
+            <canvas id="simulation-canvas"></canvas>
+            
+            <!-- Labels for water states -->
+            <div id="state-labels">
+                <div class="state-label solid" id="solid-label">
+                    <span class="state-icon">❄️</span>
+                    <span>SOLID</span>
+                    <small>Ice caps, glaciers, snow</small>
+                </div>
+                <div class="state-label liquid" id="liquid-label">
+                    <span class="state-icon">💧</span>
+                    <span>LIQUID</span>
+                    <small>Ocean, rivers, groundwater</small>
+                </div>
+                <div class="state-label gas" id="gas-label">
+                    <span class="state-icon">☁️</span>
+                    <span>GAS</span>
+                    <small>Water vapor, clouds</small>
+                </div>
+            </div>
+
+            <!-- Process indicators -->
+            <div id="process-indicators">
+                <div class="process-indicator" id="evaporation-indicator">
+                    <span>🌊➡️☁️</span>
+                    <label>Evaporation</label>
+                </div>
+                <div class="process-indicator" id="transpiration-indicator">
+                    <span>🌳➡️☁️</span>
+                    <label>Transpiration</label>
+                </div>
+                <div class="process-indicator" id="condensation-indicator">
+                    <span>☁️➡️💧</span>
+                    <label>Condensation</label>
+                </div>
+                <div class="process-indicator" id="precipitation-indicator">
+                    <span>☁️➡️🌧️</span>
+                    <label>Precipitation</label>
+                </div>
+                <div class="process-indicator" id="runoff-indicator">
+                    <span>🌧️➡️🌊</span>
+                    <label>Surface Runoff</label>
+                </div>
+                <div class="process-indicator" id="infiltration-indicator">
+                    <span>🌧️➡️⬇️</span>
+                    <label>Infiltration</label>
+                </div>
+            </div>
+
+            <!-- Temperature indicator -->
+            <div id="temperature-display">
+                <div id="sun-indicator">☀️</div>
+                <div id="temp-value">15°C</div>
+                <div id="temp-label">Global Temperature</div>
+            </div>
+        </div>
+
+        <!-- Control Panel -->
+        <div id="control-panel">
+            <h3>Climate Change Controls</h3>
+            
+            <div class="control-group">
+                <label for="temperature-slider">Global Temperature Change:</label>
+                <input type="range" id="temperature-slider" min="-2" max="6" value="0" step="0.1">
+                <span id="temp-change-value">+0.0°C</span>
+            </div>
+
+            <div class="control-group">
+                <label for="precipitation-slider">Precipitation Intensity:</label>
+                <input type="range" id="precipitation-slider" min="0.5" max="2.0" value="1.0" step="0.1">
+                <span id="precip-value">Normal</span>
+            </div>
+
+            <div class="control-group">
+                <label for="evaporation-slider">Evaporation Rate:</label>
+                <input type="range" id="evaporation-slider" min="0.5" max="2.0" value="1.0" step="0.1">
+                <span id="evap-value">Normal</span>
+            </div>
+
+            <div class="control-group">
+                <label for="ice-melting-slider">Ice Cap Melting:</label>
+                <input type="range" id="ice-melting-slider" min="0" max="2" value="0" step="0.1">
+                <span id="ice-value">None</span>
+            </div>
+
+            <div class="control-buttons">
+                <button id="play-pause-btn">⏸️ Pause</button>
+                <button id="reset-btn">🔄 Reset</button>
+                <button id="scenario-btn">🌡️ Climate Scenario</button>
+            </div>
+
+            <div class="info-panel">
+                <h4>Current Conditions:</h4>
+                <div id="condition-info">
+                    <p>🌡️ <span id="current-temp">Normal temperature</span></p>
+                    <p>🌧️ <span id="current-precip">Normal precipitation</span></p>
+                    <p>❄️ <span id="current-ice">Stable ice caps</span></p>
+                    <p>🌊 <span id="current-sea">Stable sea level</span></p>
+                </div>
+            </div>
+        </div>
+
+        <!-- Information sidebar -->
+        <div id="info-sidebar">
+            <h3>Water Cycle Processes</h3>
+            <div class="info-section">
+                <h4>🌊 Evaporation</h4>
+                <p>Heat from the sun causes water from oceans, lakes, and rivers to change from liquid to gas (water vapor)</p>
+            </div>
+            <div class="info-section">
+                <h4>🌳 Transpiration</h4>
+                <p>Plants absorb water through roots and release water vapor through their leaves</p>
+            </div>
+            <div class="info-section">
+                <h4>☁️ Condensation</h4>
+                <p>Water vapor cools and changes back to liquid droplets, forming clouds and fog</p>
+            </div>
+            <div class="info-section">
+                <h4>🌧️ Precipitation</h4>
+                <p>Water falls from clouds as rain, snow, sleet, or hail</p>
+            </div>
+            <div class="info-section">
+                <h4>🏔️ Runoff & Infiltration</h4>
+                <p>Water flows over land surface or soaks into the ground to become groundwater</p>
+            </div>
+        </div>
+    </div>
+
+    <!-- Three.js library -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="script.js"></script>
+</body>
+</html>
