@@ -1,888 +1,898 @@
-// Water Cycle Simulation with Three.js
+// Realistic Water Cycle Simulation using Three.js and WebGL Shaders
+document.addEventListener('DOMContentLoaded', () => {
+    // Check for WebGL support
+    if (!window.WebGLRenderingContext) {
+        alert("Your browser does not support WebGL. This simulation cannot run.");
+        return;
+    }
+
+    const simulation = new WaterCycleSimulation();
+});
+
 class WaterCycleSimulation {
     constructor() {
-        this.scene = null;
-        this.camera = null;
-        this.renderer = null;
-        this.terrain = null;
-        this.ocean = null;
-        this.sun = null;
-        this.clouds = [];
-        this.particles = {
-            evaporation: [],
-            transpiration: [],
-            precipitation: [],
-            runoff: []
-        };
-        this.trees = [];
-        this.iceCaps = [];
-        
-        // Climate parameters
-        this.climateParams = {
-            temperature: 15,
-            temperatureChange: 0,
-            precipitationIntensity: 1.0,
-            evaporationRate: 1.0,
-            iceMelting: 0,
-            seaLevel: 0
-        };
-        
-        // Animation control
-        this.isPlaying = true;
-        this.animationSpeed = 1.0;
-        
-        this.init();
-        this.setupControls();
-        this.animate();
-    }
-    
-    init() {
-        // Create scene
+        // Core Three.js components
         this.scene = new THREE.Scene();
-        this.scene.fog = new THREE.Fog(0x87CEEB, 50, 200);
-        
-        // Create camera
-        this.camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
-        this.camera.position.set(0, 30, 50);
-        this.camera.lookAt(0, 0, 0);
-        
-        // Create renderer
-        const canvas = document.getElementById('simulation-canvas');
-        this.renderer = new THREE.WebGLRenderer({ canvas: canvas, antialias: true, alpha: true });
-        this.renderer.setSize(canvas.clientWidth, canvas.clientHeight);
-        this.renderer.setClearColor(0x87CEEB, 1);
+        this.camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 2000);
+        this.renderer = new THREE.WebGLRenderer({
+            canvas: document.getElementById('simulation-canvas'),
+            antialias: true,
+            alpha: true
+        });
+
+        // Environment and simulation parameters
+        this.clock = new THREE.Clock();
+        this.simplex = new SimplexNoise();
+        this.isPlaying = true;
+        this.params = {
+            temperature: 15.0,
+            windSpeed: 10.0,
+        };
+
+        // Water cycle state machine
+        this.cycleState = 'EVAPORATION';
+        this.cycleTimer = 0;
+        this.cycleDurations = {
+            EVAPORATION: 15, // seconds
+            CONDENSATION: 10,
+            PRECIPITATION: 20,
+            COLLECTION: 8
+        };
+
+        // Object containers
+        this.objects = {};
+        this.particleSystems = {};
+
+        this.init();
+    }
+
+    async init() {
+        this.setupRenderer();
+        this.setupCamera();
+        this.setupLighting();
+        this.setupEventListeners();
+
+        // Create scene elements
+        this.createSky();
+        this.createTerrain();
+        this.createWater();
+        await this.createTrees();
+        this.createClouds();
+
+        // Create particle systems for water cycle processes
+        this.createEvaporationParticles();
+        this.createRainParticles();
+        this.createRunoffParticles();
+
+        // Hide loading screen and start animation
+        document.getElementById('loading-screen').style.opacity = '0';
+        setTimeout(() => {
+            document.getElementById('loading-screen').style.display = 'none';
+        }, 500);
+
+        this.animate();
+        this.updateCycleStage();
+    }
+
+    // --- SETUP METHODS --- //
+
+    setupRenderer() {
+        const container = document.getElementById('simulation-container');
+        this.renderer.setSize(container.clientWidth, container.clientHeight);
+        this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+        this.renderer.outputEncoding = THREE.sRGBEncoding;
+        this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
         this.renderer.shadowMap.enabled = true;
         this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
-        
-        // Add lighting
-        this.setupLighting();
-        
-        // Create terrain and environment
-        this.createTerrain();
-        this.createOcean();
-        this.createSun();
-        this.createTrees();
-        this.createIceCaps();
-        this.createClouds();
-        
-        // Initialize particle systems
-        this.initParticleSystems();
-        
-        // Handle window resize
-        window.addEventListener('resize', () => this.onWindowResize());
     }
-    
+
+    setupCamera() {
+        this.camera.position.set(60, 40, 80);
+        this.camera.lookAt(0, 0, 0);
+    }
+
     setupLighting() {
-        // Ambient light
-        const ambientLight = new THREE.AmbientLight(0x404040, 0.3);
+        // Ambient light for overall illumination
+        const ambientLight = new THREE.AmbientLight(0x6093c4, 0.5);
         this.scene.add(ambientLight);
-        
-        // Directional light (sun)
-        this.sunLight = new THREE.DirectionalLight(0xFFD700, 1);
-        this.sunLight.position.set(50, 50, 0);
-        this.sunLight.castShadow = true;
-        this.sunLight.shadow.mapSize.width = 2048;
-        this.sunLight.shadow.mapSize.height = 2048;
-        this.sunLight.shadow.camera.near = 0.5;
-        this.sunLight.shadow.camera.far = 500;
-        this.scene.add(this.sunLight);
-        
-        // Point light for atmosphere
-        const atmosphereLight = new THREE.PointLight(0x87CEEB, 0.5, 100);
-        atmosphereLight.position.set(0, 30, 0);
-        this.scene.add(atmosphereLight);
+
+        // Directional light for sun
+        this.objects.sunLight = new THREE.DirectionalLight(0xffffff, 1.5);
+        this.objects.sunLight.position.set(100, 100, 50);
+        this.objects.sunLight.castShadow = true;
+        this.objects.sunLight.shadow.mapSize.set(2048, 2048);
+        this.objects.sunLight.shadow.camera.left = -100;
+        this.objects.sunLight.shadow.camera.right = 100;
+        this.objects.sunLight.shadow.camera.top = 100;
+        this.objects.sunLight.shadow.camera.bottom = -100;
+        this.objects.sunLight.shadow.camera.near = 0.5;
+        this.objects.sunLight.shadow.camera.far = 300;
+        this.scene.add(this.objects.sunLight);
     }
-    
+
+    // --- SCENE CREATION METHODS --- //
+
+    createSky() {
+        const sky = new THREE.Sky();
+        sky.scale.setScalar(1000);
+        this.scene.add(sky);
+
+        const sun = new THREE.Vector3();
+        const effectController = {
+            turbidity: 10,
+            rayleigh: 2,
+            mieCoefficient: 0.005,
+            mieDirectionalG: 0.8,
+            elevation: 2,
+            azimuth: 180,
+        };
+
+        const uniforms = sky.material.uniforms;
+        uniforms['turbidity'].value = effectController.turbidity;
+        uniforms['rayleigh'].value = effectController.rayleigh;
+        uniforms['mieCoefficient'].value = effectController.mieCoefficient;
+        uniforms['mieDirectionalG'].value = effectController.mieDirectionalG;
+
+        const phi = THREE.MathUtils.degToRad(90 - effectController.elevation);
+        const theta = THREE.MathUtils.degToRad(effectController.azimuth);
+        sun.setFromSphericalCoords(1, phi, theta);
+        uniforms['sunPosition'].value.copy(sun);
+
+        this.objects.sunLight.position.copy(sun).multiplyScalar(100);
+    }
+
     createTerrain() {
-        // Create terrain geometry
-        const terrainGeometry = new THREE.PlaneGeometry(100, 100, 50, 50);
-        const vertices = terrainGeometry.attributes.position.array;
-        
-        // Generate height map for mountains and valleys
-        for (let i = 0; i < vertices.length; i += 3) {
-            const x = vertices[i];
-            const z = vertices[i + 2];
-            const distance = Math.sqrt(x * x + z * z);
+        const size = 200;
+        const segments = 100;
+        const geometry = new THREE.PlaneGeometry(size, size, segments, segments);
+
+        const positions = geometry.attributes.position;
+        const colors = [];
+
+        // Generate terrain height and colors
+        for (let i = 0; i < positions.count; i++) {
+            const x = positions.getX(i);
+            const z = positions.getZ(i);
             
-            // Create mountain ranges
-            let height = 0;
-            height += Math.sin(x * 0.1) * Math.cos(z * 0.1) * 8;
-            height += Math.sin(x * 0.05) * Math.cos(z * 0.05) * 15;
-            height += Math.random() * 2;
-            
-            // Create valleys near center for rivers
-            if (Math.abs(x) < 20 && Math.abs(z) < 20) {
-                height *= 0.3;
-            }
-            
-            vertices[i + 1] = Math.max(height, -2);
+            // Generate height using simplex noise
+            let height = this.simplex.noise2D(x / 50, z / 50) * 10;
+            height += this.simplex.noise2D(x / 20, z / 20) * 3;
+            height += this.simplex.noise2D(x / 10, z / 10) * 1;
+            positions.setY(i, height);
+
+            // Set colors based on height
+            const snowColor = new THREE.Color(0xffffff);
+            const rockColor = new THREE.Color(0x808080);
+            const grassColor = new THREE.Color(0x559020);
+            const sandColor = new THREE.Color(0xc2b280);
+
+            let color = new THREE.Color();
+            if (height > 12) color.copy(snowColor);
+            else if (height > 8) color.lerpColors(rockColor, snowColor, (height - 8) / 4);
+            else if (height > 2) color.lerpColors(grassColor, rockColor, (height - 2) / 6);
+            else if (height > 0) color.lerpColors(sandColor, grassColor, height / 2);
+            else color.copy(sandColor);
+
+            colors.push(color.r, color.g, color.b);
         }
-        
-        terrainGeometry.attributes.position.needsUpdate = true;
-        terrainGeometry.computeVertexNormals();
-        
-        // Create terrain material with texture
-        const terrainMaterial = new THREE.MeshLambertMaterial({
-            color: 0x8FBC8F,
-            transparent: true,
-            opacity: 0.9
+        geometry.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
+        geometry.computeVertexNormals();
+
+        const material = new THREE.MeshStandardMaterial({
+            vertexColors: true,
+            roughness: 0.8,
+            metalness: 0.1
         });
-        
-        this.terrain = new THREE.Mesh(terrainGeometry, terrainMaterial);
-        this.terrain.rotation.x = -Math.PI / 2;
-        this.terrain.receiveShadow = true;
-        this.scene.add(this.terrain);
-        
-        // Add underground water representation
-        this.createGroundwater();
+
+        this.objects.terrain = new THREE.Mesh(geometry, material);
+        this.objects.terrain.rotation.x = -Math.PI / 2;
+        this.objects.terrain.receiveShadow = true;
+        this.scene.add(this.objects.terrain);
     }
     
-    createGroundwater() {
-        const groundwaterGeometry = new THREE.PlaneGeometry(80, 80);
-        const groundwaterMaterial = new THREE.MeshBasicMaterial({
-            color: 0x4169E1,
-            transparent: true,
-            opacity: 0.3
+    createWater() {
+        const waterGeometry = new THREE.PlaneGeometry(200, 200);
+        this.objects.water = new THREE.Water(waterGeometry, {
+            textureWidth: 512,
+            textureHeight: 512,
+            waterNormals: new THREE.TextureLoader().load('https://raw.githubusercontent.com/mrdoob/three.js/master/examples/textures/waternormals.jpg', (texture) => {
+                texture.wrapS = texture.wrapT = THREE.RepeatWrapping;
+            }),
+            sunDirection: new THREE.Vector3(),
+            sunColor: 0xffffff,
+            waterColor: 0x001e0f,
+            distortionScale: 3.7,
+            fog: this.scene.fog !== undefined
         });
-        
-        const groundwater = new THREE.Mesh(groundwaterGeometry, groundwaterMaterial);
-        groundwater.rotation.x = -Math.PI / 2;
-        groundwater.position.y = -5;
-        this.scene.add(groundwater);
+        this.objects.water.rotation.x = -Math.PI / 2;
+        this.objects.water.position.y = 0.5; // Sea level
+        this.scene.add(this.objects.water);
     }
     
-    createOcean() {
-        const oceanGeometry = new THREE.PlaneGeometry(60, 60, 30, 30);
-        const oceanMaterial = new THREE.ShaderMaterial({
-            uniforms: {
-                time: { value: 0 },
-                colorDeep: { value: new THREE.Color(0x006994) },
-                colorShallow: { value: new THREE.Color(0x87CEEB) },
-                transparency: { value: 0.8 }
-            },
-            vertexShader: `
-                uniform float time;
-                varying vec2 vUv;
-                varying float vElevation;
-                
-                void main() {
-                    vUv = uv;
-                    
-                    vec4 modelPosition = modelMatrix * vec4(position, 1.0);
-                    float elevation = sin(modelPosition.x * 0.1 + time) * 0.5;
-                    elevation += sin(modelPosition.z * 0.1 + time * 0.7) * 0.3;
-                    modelPosition.y += elevation;
-                    vElevation = elevation;
-                    
-                    vec4 viewPosition = viewMatrix * modelPosition;
-                    vec4 projectedPosition = projectionMatrix * viewPosition;
-                    
-                    gl_Position = projectedPosition;
+    async createTrees() {
+        // More realistic trees using instanced mesh for performance
+        const loader = new THREE.GLTFLoader();
+        const treeData = await loader.loadAsync('https://raw.githubusercontent.com/mrdoob/three.js/master/examples/models/gltf/pine.glb');
+        const treeMesh = treeData.scene.children[0];
+        treeMesh.castShadow = true;
+
+        const count = 200;
+        const instancedTreeMesh = new THREE.InstancedMesh(treeMesh.geometry, treeMesh.material, count);
+        instancedTreeMesh.castShadow = true;
+        instancedTreeMesh.receiveShadow = true;
+
+        const dummy = new THREE.Object3D();
+        for (let i = 0; i < count; i++) {
+            const x = (Math.random() - 0.5) * 180;
+            const z = (Math.random() - 0.5) * 180;
+            
+            const raycaster = new THREE.Raycaster(new THREE.Vector3(x, 50, z), new THREE.Vector3(0, -1, 0));
+            const intersects = raycaster.intersectObject(this.objects.terrain);
+
+            if (intersects.length > 0) {
+                const y = intersects[0].point.y;
+                if (y > 2 && y < 10) { // Only place on grassy areas
+                    dummy.position.set(x, y, z);
+                    dummy.rotation.y = Math.random() * Math.PI * 2;
+                    const scale = Math.random() * 0.5 + 0.8;
+                    dummy.scale.set(scale, scale, scale);
+                    dummy.updateMatrix();
+                    instancedTreeMesh.setMatrixAt(i, dummy.matrix);
                 }
-            `,
-            fragmentShader: `
-                uniform vec3 colorDeep;
-                uniform vec3 colorShallow;
-                uniform float transparency;
-                varying vec2 vUv;
-                varying float vElevation;
-                
-                void main() {
-                    float mixStrength = (vElevation + 1.0) * 0.5;
-                    vec3 color = mix(colorDeep, colorShallow, mixStrength);
-                    gl_FragColor = vec4(color, transparency);
-                }
-            `,
-            transparent: true
-        });
-        
-        this.ocean = new THREE.Mesh(oceanGeometry, oceanMaterial);
-        this.ocean.rotation.x = -Math.PI / 2;
-        this.ocean.position.y = 0.1;
-        this.scene.add(this.ocean);
-    }
-    
-    createSun() {
-        const sunGeometry = new THREE.SphereGeometry(3, 32, 32);
-        const sunMaterial = new THREE.MeshBasicMaterial({
-            color: 0xFFD700,
-            emissive: 0xFFD700,
-            emissiveIntensity: 0.5
-        });
-        
-        this.sun = new THREE.Mesh(sunGeometry, sunMaterial);
-        this.sun.position.set(40, 40, -20);
-        this.scene.add(this.sun);
-        
-        // Add sun glow effect
-        const glowGeometry = new THREE.SphereGeometry(4, 32, 32);
-        const glowMaterial = new THREE.MeshBasicMaterial({
-            color: 0xFFD700,
-            transparent: true,
-            opacity: 0.3
-        });
-        
-        const sunGlow = new THREE.Mesh(glowGeometry, glowMaterial);
-        sunGlow.position.copy(this.sun.position);
-        this.scene.add(sunGlow);
-    }
-    
-    createTrees() {
-        for (let i = 0; i < 20; i++) {
-            const tree = this.createSingleTree();
-            const x = (Math.random() - 0.5) * 60;
-            const z = (Math.random() - 0.5) * 60;
-            
-            // Get terrain height at this position
-            const y = this.getTerrainHeight(x, z);
-            
-            if (y > 2) { // Only place trees on higher ground
-                tree.position.set(x, y, z);
-                this.trees.push(tree);
-                this.scene.add(tree);
             }
         }
+        this.scene.add(instancedTreeMesh);
     }
-    
-    createSingleTree() {
-        const treeGroup = new THREE.Group();
-        
-        // Trunk
-        const trunkGeometry = new THREE.CylinderGeometry(0.3, 0.5, 4);
-        const trunkMaterial = new THREE.MeshLambertMaterial({ color: 0x8B4513 });
-        const trunk = new THREE.Mesh(trunkGeometry, trunkMaterial);
-        trunk.position.y = 2;
-        trunk.castShadow = true;
-        treeGroup.add(trunk);
-        
-        // Leaves
-        const leavesGeometry = new THREE.SphereGeometry(2.5, 8, 8);
-        const leavesMaterial = new THREE.MeshLambertMaterial({ color: 0x228B22 });
-        const leaves = new THREE.Mesh(leavesGeometry, leavesMaterial);
-        leaves.position.y = 5;
-        leaves.castShadow = true;
-        treeGroup.add(leaves);
-        
-        return treeGroup;
-    }
-    
-    createIceCaps() {
-        // Create ice caps on mountain peaks
-        for (let i = 0; i < 10; i++) {
-            const x = (Math.random() - 0.5) * 80;
-            const z = (Math.random() - 0.5) * 80;
-            const y = this.getTerrainHeight(x, z);
-            
-            if (y > 15) { // Only on high peaks
-                const iceGeometry = new THREE.SphereGeometry(2 + Math.random() * 2, 8, 8);
-                const iceMaterial = new THREE.MeshLambertMaterial({
-                    color: 0xF0F8FF,
-                    transparent: true,
-                    opacity: 0.9
-                });
-                
-                const ice = new THREE.Mesh(iceGeometry, iceMaterial);
-                ice.position.set(x, y + 1, z);
-                ice.scale.y = 0.5;
-                this.iceCaps.push(ice);
-                this.scene.add(ice);
-            }
-        }
-    }
-    
+
     createClouds() {
-        for (let i = 0; i < 8; i++) {
-            const cloud = this.createSingleCloud();
-            cloud.position.set(
-                (Math.random() - 0.5) * 100,
-                20 + Math.random() * 10,
-                (Math.random() - 0.5) * 100
-            );
-            this.clouds.push(cloud);
-            this.scene.add(cloud);
-        }
-    }
-    
-    createSingleCloud() {
-        const cloudGroup = new THREE.Group();
-        const cloudMaterial = new THREE.MeshLambertMaterial({
-            color: 0xFFFFFF,
+        // Volumetric-style clouds using layered planes
+        this.objects.clouds = new THREE.Group();
+        const cloudTexture = new THREE.TextureLoader().load('https://raw.githubusercontent.com/mrdoob/three.js/master/examples/textures/cloud.png');
+        const cloudMaterial = new THREE.SpriteMaterial({
+            map: cloudTexture,
+            color: 0xffffff,
             transparent: true,
-            opacity: 0.8
+            opacity: 0.6,
+            blending: THREE.AdditiveBlending
         });
-        
-        // Create multiple spheres for cloud shape
-        for (let i = 0; i < 5; i++) {
-            const cloudGeometry = new THREE.SphereGeometry(2 + Math.random() * 2, 8, 8);
-            const cloudPart = new THREE.Mesh(cloudGeometry, cloudMaterial);
-            cloudPart.position.set(
-                (Math.random() - 0.5) * 8,
-                (Math.random() - 0.5) * 2,
-                (Math.random() - 0.5) * 8
+
+        for (let i = 0; i < 25; i++) {
+            const cloudSprite = new THREE.Sprite(cloudMaterial);
+            cloudSprite.position.set(
+                (Math.random() - 0.5) * 150,
+                30 + Math.random() * 15, // Cloud altitude
+                (Math.random() - 0.5) * 150
             );
-            cloudGroup.add(cloudPart);
+            const scale = Math.random() * 20 + 20;
+            cloudSprite.scale.set(scale, scale, scale);
+            this.objects.clouds.add(cloudSprite);
         }
-        
-        return cloudGroup;
+        this.scene.add(this.objects.clouds);
     }
-    
-    initParticleSystems() {
-        // Evaporation particles
-        this.createEvaporationSystem();
-        
-        // Transpiration particles
-        this.createTranspirationSystem();
-        
-        // Precipitation particles
-        this.createPrecipitationSystem();
-        
-        // Runoff particles
-        this.createRunoffSystem();
-    }
-    
-    createEvaporationSystem() {
-        const particleCount = 100;
+
+    // --- PARTICLE SYSTEM METHODS --- //
+
+    createEvaporationParticles() {
+        const count = 500;
         const geometry = new THREE.BufferGeometry();
-        const positions = new Float32Array(particleCount * 3);
-        const velocities = new Float32Array(particleCount * 3);
-        const lifetimes = new Float32Array(particleCount);
-        
-        for (let i = 0; i < particleCount; i++) {
+        const positions = new Float32Array(count * 3);
+        const velocities = new Float32Array(count * 3);
+
+        for (let i = 0; i < count; i++) {
             const i3 = i * 3;
-            positions[i3] = (Math.random() - 0.5) * 50; // x
-            positions[i3 + 1] = 0.5; // y
-            positions[i3 + 2] = (Math.random() - 0.5) * 50; // z
+            positions[i3] = (Math.random() - 0.5) * 150;
+            positions[i3 + 1] = 0.5;
+            positions[i3 + 2] = (Math.random() - 0.5) * 150;
             
-            velocities[i3] = (Math.random() - 0.5) * 0.02;
-            velocities[i3 + 1] = 0.05 + Math.random() * 0.03;
-            velocities[i3 + 2] = (Math.random() - 0.5) * 0.02;
-            
-            lifetimes[i] = Math.random() * 100;
+            velocities[i3] = (Math.random() - 0.5) * 0.1;
+            velocities[i3 + 1] = Math.random() * 0.2 + 0.1; // Upward velocity
+            velocities[i3 + 2] = (Math.random() - 0.5) * 0.1;
         }
-        
         geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
         
         const material = new THREE.PointsMaterial({
-            color: 0x87CEEB,
-            size: 0.5,
+            color: 0xeeeeff,
+            size: 1,
             transparent: true,
-            opacity: 0.6
+            opacity: 0, // Initially invisible
+            blending: THREE.AdditiveBlending
         });
-        
-        const evaporationParticles = new THREE.Points(geometry, material);
-        evaporationParticles.userData = { velocities, lifetimes, maxLifetime: 100 };
-        this.particles.evaporation.push(evaporationParticles);
-        this.scene.add(evaporationParticles);
+
+        this.particleSystems.evaporation = new THREE.Points(geometry, material);
+        this.particleSystems.evaporation.userData.velocities = velocities;
+        this.scene.add(this.particleSystems.evaporation);
     }
-    
-    createTranspirationSystem() {
-        this.trees.forEach(tree => {
-            const particleCount = 20;
-            const geometry = new THREE.BufferGeometry();
-            const positions = new Float32Array(particleCount * 3);
-            const velocities = new Float32Array(particleCount * 3);
-            const lifetimes = new Float32Array(particleCount);
-            
-            for (let i = 0; i < particleCount; i++) {
-                const i3 = i * 3;
-                positions[i3] = tree.position.x + (Math.random() - 0.5) * 4;
-                positions[i3 + 1] = tree.position.y + 4;
-                positions[i3 + 2] = tree.position.z + (Math.random() - 0.5) * 4;
-                
-                velocities[i3] = (Math.random() - 0.5) * 0.01;
-                velocities[i3 + 1] = 0.03 + Math.random() * 0.02;
-                velocities[i3 + 2] = (Math.random() - 0.5) * 0.01;
-                
-                lifetimes[i] = Math.random() * 80;
-            }
-            
-            geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
-            
-            const material = new THREE.PointsMaterial({
-                color: 0x90EE90,
-                size: 0.3,
-                transparent: true,
-                opacity: 0.4
-            });
-            
-            const transpirationParticles = new THREE.Points(geometry, material);
-            transpirationParticles.userData = { velocities, lifetimes, maxLifetime: 80 };
-            this.particles.transpiration.push(transpirationParticles);
-            this.scene.add(transpirationParticles);
-        });
-    }
-    
-    createPrecipitationSystem() {
-        this.clouds.forEach(cloud => {
-            const particleCount = 50;
-            const geometry = new THREE.BufferGeometry();
-            const positions = new Float32Array(particleCount * 3);
-            const velocities = new Float32Array(particleCount * 3);
-            const lifetimes = new Float32Array(particleCount);
-            
-            for (let i = 0; i < particleCount; i++) {
-                const i3 = i * 3;
-                positions[i3] = cloud.position.x + (Math.random() - 0.5) * 10;
-                positions[i3 + 1] = cloud.position.y;
-                positions[i3 + 2] = cloud.position.z + (Math.random() - 0.5) * 10;
-                
-                velocities[i3] = (Math.random() - 0.5) * 0.01;
-                velocities[i3 + 1] = -0.3 - Math.random() * 0.2;
-                velocities[i3 + 2] = (Math.random() - 0.5) * 0.01;
-                
-                lifetimes[i] = Math.random() * 60;
-            }
-            
-            geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
-            
-            const material = new THREE.PointsMaterial({
-                color: 0x4169E1,
-                size: 0.4,
-                transparent: true,
-                opacity: 0.7
-            });
-            
-            const precipitationParticles = new THREE.Points(geometry, material);
-            precipitationParticles.userData = { velocities, lifetimes, maxLifetime: 60, cloud };
-            this.particles.precipitation.push(precipitationParticles);
-            this.scene.add(precipitationParticles);
-        });
-    }
-    
-    createRunoffSystem() {
-        const particleCount = 80;
+
+    createRainParticles() {
+        const count = 5000;
         const geometry = new THREE.BufferGeometry();
-        const positions = new Float32Array(particleCount * 3);
-        const velocities = new Float32Array(particleCount * 3);
-        const lifetimes = new Float32Array(particleCount);
-        
-        for (let i = 0; i < particleCount; i++) {
+        const positions = new Float32Array(count * 3);
+        const velocities = new Float32Array(count * 3);
+
+        for (let i = 0; i < count; i++) {
             const i3 = i * 3;
-            const x = (Math.random() - 0.5) * 60;
-            const z = (Math.random() - 0.5) * 60;
-            const y = this.getTerrainHeight(x, z);
+            positions[i3] = (Math.random() - 0.5) * 200;
+            positions[i3 + 1] = 30 + Math.random() * 20;
+            positions[i3 + 2] = (Math.random() - 0.5) * 200;
             
-            positions[i3] = x;
-            positions[i3 + 1] = y + 0.5;
-            positions[i3 + 2] = z;
-            
-            // Flow towards center (ocean)
-            const flowDirection = new THREE.Vector3(-x, 0, -z).normalize();
-            velocities[i3] = flowDirection.x * 0.1;
-            velocities[i3 + 1] = -0.02;
-            velocities[i3 + 2] = flowDirection.z * 0.1;
-            
-            lifetimes[i] = Math.random() * 120;
+            velocities[i3] = 0;
+            velocities[i3 + 1] = - (Math.random() * 0.5 + 0.5); // Downward velocity
+            velocities[i3 + 2] = 0;
         }
-        
         geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
         
         const material = new THREE.PointsMaterial({
-            color: 0x4682B4,
+            color: 0xaaaaee,
             size: 0.3,
             transparent: true,
-            opacity: 0.5
+            opacity: 0, // Initially invisible
         });
-        
-        const runoffParticles = new THREE.Points(geometry, material);
-        runoffParticles.userData = { velocities, lifetimes, maxLifetime: 120 };
-        this.particles.runoff.push(runoffParticles);
-        this.scene.add(runoffParticles);
+
+        this.particleSystems.rain = new THREE.Points(geometry, material);
+        this.particleSystems.rain.userData.velocities = velocities;
+        this.scene.add(this.particleSystems.rain);
     }
-    
-    setupControls() {
-        // Temperature slider
-        const tempSlider = document.getElementById('temperature-slider');
-        const tempValue = document.getElementById('temp-change-value');
-        tempSlider.addEventListener('input', (e) => {
-            this.climateParams.temperatureChange = parseFloat(e.target.value);
-            this.climateParams.temperature = 15 + this.climateParams.temperatureChange;
-            tempValue.textContent = `${this.climateParams.temperatureChange >= 0 ? '+' : ''}${this.climateParams.temperatureChange.toFixed(1)}°C`;
-            this.updateTemperatureDisplay();
-            this.updateClimateEffects();
-        });
+
+    createRunoffParticles() {
+        const count = 2000;
+        const geometry = new THREE.BufferGeometry();
+        const positions = new Float32Array(count * 3);
         
-        // Precipitation slider
-        const precipSlider = document.getElementById('precipitation-slider');
-        const precipValue = document.getElementById('precip-value');
-        precipSlider.addEventListener('input', (e) => {
-            this.climateParams.precipitationIntensity = parseFloat(e.target.value);
-            const intensity = this.climateParams.precipitationIntensity;
-            precipValue.textContent = intensity < 0.8 ? 'Low' : intensity > 1.2 ? 'High' : 'Normal';
-            this.updateProcessIndicator('precipitation', intensity > 1.0);
-        });
+        geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
         
-        // Evaporation slider
-        const evapSlider = document.getElementById('evaporation-slider');
-        const evapValue = document.getElementById('evap-value');
-        evapSlider.addEventListener('input', (e) => {
-            this.climateParams.evaporationRate = parseFloat(e.target.value);
-            const rate = this.climateParams.evaporationRate;
-            evapValue.textContent = rate < 0.8 ? 'Low' : rate > 1.2 ? 'High' : 'Normal';
-            this.updateProcessIndicator('evaporation', rate > 1.0);
+        const material = new THREE.PointsMaterial({
+            color: 0x6699ff,
+            size: 0.2,
+            transparent: true,
+            opacity: 0, // Initially invisible
         });
-        
-        // Ice melting slider
-        const iceSlider = document.getElementById('ice-melting-slider');
-        const iceValue = document.getElementById('ice-value');
-        iceSlider.addEventListener('input', (e) => {
-            this.climateParams.iceMelting = parseFloat(e.target.value);
-            const melting = this.climateParams.iceMelting;
-            iceValue.textContent = melting === 0 ? 'None' : melting < 1 ? 'Slow' : 'Rapid';
-            this.updateIceCapSize();
+
+        this.particleSystems.runoff = new THREE.Points(geometry, material);
+        this.scene.add(this.particleSystems.runoff);
+    }
+
+    // --- ANIMATION & UPDATE LOGIC --- //
+
+    animate() {
+        requestAnimationFrame(() => this.animate());
+
+        if (!this.isPlaying) return;
+
+        const delta = this.clock.getDelta();
+        const time = this.clock.getElapsedTime();
+
+        // Update water cycle
+        this.updateWaterCycle(delta);
+
+        // Animate objects
+        this.objects.water.material.uniforms['time'].value += 1.0 / 60.0;
+        this.objects.clouds.children.forEach((cloud, i) => {
+            cloud.position.x += (delta * this.params.windSpeed / 5);
+            if (cloud.position.x > 100) cloud.position.x = -100;
         });
-        
-        // Control buttons
+
+        this.renderer.render(this.scene, this.camera);
+    }
+
+    updateWaterCycle(delta) {
+        this.cycleTimer += delta;
+        const currentDuration = this.cycleDurations[this.cycleState];
+
+        // Transition to next state if timer exceeds duration
+        if (this.cycleTimer > currentDuration) {
+            this.cycleTimer = 0;
+            switch (this.cycleState) {
+                case 'EVAPORATION': this.cycleState = 'CONDENSATION'; break;
+                case 'CONDENSATION': this.cycleState = 'PRECIPITATION'; break;
+                case 'PRECIPITATION': this.cycleState = 'COLLECTION'; break;
+                case 'COLLECTION': this.cycleState = 'EVAPORATION'; break;
+            }
+            this.updateCycleStage();
+        }
+
+        const progress = this.cycleTimer / currentDuration;
+
+        // Update particle systems based on cycle state
+        this.updateEvaporation(this.cycleState === 'EVAPORATION', progress);
+        this.updateCondensation(this.cycleState === 'CONDENSATION', progress);
+        this.updatePrecipitation(this.cycleState === 'PRECIPITATION', progress);
+        this.updateCollection(this.cycleState === 'COLLECTION', progress);
+    }
+
+    updateEvaporation(isActive, progress) {
+        const particles = this.particleSystems.evaporation;
+        particles.material.opacity = isActive ? Math.sin(progress * Math.PI) * 0.5 : 0;
+
+        if (!isActive) return;
+
+        const positions = particles.geometry.attributes.position;
+        const velocities = particles.userData.velocities;
+
+        for (let i = 0; i < positions.count; i++) {
+            positions.setY(i, positions.getY(i) + velocities[i*3+1] * (1 + this.params.temperature / 15));
+            if (positions.getY(i) > 30) {
+                positions.setY(i, 0.5); // Reset particle
+            }
+        }
+        positions.needsUpdate = true;
+    }
+
+    updateCondensation(isActive, progress) {
+        // Visually represent condensation by making clouds denser
+        const opacity = 0.6 + Math.sin(progress * Math.PI) * 0.4;
+        this.objects.clouds.children.forEach(cloud => {
+            cloud.material.opacity = opacity;
+        });
+    }
+
+    updatePrecipitation(isActive, progress) {
+        const particles = this.particleSystems.rain;
+        particles.material.opacity = isActive ? Math.sin(progress * Math.PI) * 0.7 : 0;
+
+        if (!isActive) return;
+
+        const positions = particles.geometry.attributes.position;
+        const velocities = particles.userData.velocities;
+
+        for (let i = 0; i < positions.count; i++) {
+            const i3 = i * 3;
+            positions.setX(i, positions.getX(i) + this.params.windSpeed / 50);
+            positions.setY(i, positions.getY(i) + velocities[i3 + 1]);
+
+            // Check for collision with terrain
+            const raycaster = new THREE.Raycaster(new THREE.Vector3(positions.getX(i), 50, positions.getZ(i)), new THREE.Vector3(0, -1, 0));
+            const intersects = raycaster.intersectObject(this.objects.terrain);
+
+            if (intersects.length > 0 && positions.getY(i) < intersects[0].point.y) {
+                // Reset particle to a cloud position
+                const cloud = this.objects.clouds.children[Math.floor(Math.random() * this.objects.clouds.children.length)];
+                positions.setX(i, cloud.position.x + (Math.random() - 0.5) * 10);
+                positions.setY(i, cloud.position.y);
+                positions.setZ(i, cloud.position.z + (Math.random() - 0.5) * 10);
+            } else if (positions.getY(i) < -10) {
+                 const cloud = this.objects.clouds.children[Math.floor(Math.random() * this.objects.clouds.children.length)];
+                positions.setX(i, cloud.position.x + (Math.random() - 0.5) * 10);
+                positions.setY(i, cloud.position.y);
+                positions.setZ(i, cloud.position.z + (Math.random() - 0.5) * 10);
+            }
+        }
+        positions.needsUpdate = true;
+    }
+
+    updateCollection(isActive, progress) {
+        // For simplicity, we just show the info panel update.
+        // A more complex version would animate runoff particles.
+    }
+
+
+    // --- UI & EVENT HANDLERS --- //
+
+    setupEventListeners() {
+        window.addEventListener('resize', () => this.onWindowResize());
+
+        // Control panel listeners
+        document.getElementById('temperature-slider').addEventListener('input', (e) => {
+            this.params.temperature = parseFloat(e.target.value);
+            document.getElementById('temp-value').textContent = `${this.params.temperature.toFixed(1)}°C`;
+        });
+        document.getElementById('wind-slider').addEventListener('input', (e) => {
+            this.params.windSpeed = parseFloat(e.target.value);
+            document.getElementById('wind-value').textContent = `${this.params.windSpeed.toFixed(0)} km/h`;
+        });
         document.getElementById('play-pause-btn').addEventListener('click', () => this.togglePlayPause());
         document.getElementById('reset-btn').addEventListener('click', () => this.resetSimulation());
-        document.getElementById('scenario-btn').addEventListener('click', () => this.loadClimateScenario());
         
-        // Camera controls (simple mouse interaction)
-        this.setupCameraControls();
-    }
-    
-    setupCameraControls() {
-        let isMouseDown = false;
-        let mouseX = 0;
-        let mouseY = 0;
-        
+        // Mouse controls for camera
+        let isDragging = false;
+        let previousMousePosition = { x: 0, y: 0 };
         const canvas = this.renderer.domElement;
-        
-        canvas.addEventListener('mousedown', (event) => {
-            isMouseDown = true;
-            mouseX = event.clientX;
-            mouseY = event.clientY;
-        });
-        
-        canvas.addEventListener('mouseup', () => {
-            isMouseDown = false;
-        });
-        
-        canvas.addEventListener('mousemove', (event) => {
-            if (!isMouseDown) return;
+
+        canvas.addEventListener('mousedown', () => isDragging = true);
+        canvas.addEventListener('mouseup', () => isDragging = false);
+        canvas.addEventListener('mouseleave', () => isDragging = false);
+        canvas.addEventListener('mousemove', (e) => {
+            if (!isDragging) return;
+            const deltaMove = {
+                x: e.offsetX - previousMousePosition.x,
+                y: e.offsetY - previousMousePosition.y
+            };
             
-            const deltaX = event.clientX - mouseX;
-            const deltaY = event.clientY - mouseY;
+            const deltaRotationQuaternion = new THREE.Quaternion()
+                .setFromEuler(new THREE.Euler(
+                    THREE.MathUtils.degToRad(deltaMove.y * 0.5),
+                    THREE.MathUtils.degToRad(deltaMove.x * 0.5),
+                    0,
+                    'XYZ'
+                ));
             
-            // Rotate camera around center
-            const spherical = new THREE.Spherical();
-            spherical.setFromVector3(this.camera.position);
-            spherical.theta -= deltaX * 0.01;
-            spherical.phi += deltaY * 0.01;
-            spherical.phi = Math.max(0.1, Math.min(Math.PI - 0.1, spherical.phi));
-            
-            this.camera.position.setFromSpherical(spherical);
+            this.camera.position.applyQuaternion(deltaRotationQuaternion);
             this.camera.lookAt(0, 0, 0);
-            
-            mouseX = event.clientX;
-            mouseY = event.clientY;
+
+            previousMousePosition = { x: e.offsetX, y: e.offsetY };
         });
-        
-        // Zoom with mouse wheel
-        canvas.addEventListener('wheel', (event) => {
-            const factor = event.deltaY > 0 ? 1.1 : 0.9;
-            this.camera.position.multiplyScalar(factor);
-            
-            // Limit zoom
-            const distance = this.camera.position.length();
-            if (distance < 20) this.camera.position.normalize().multiplyScalar(20);
-            if (distance > 200) this.camera.position.normalize().multiplyScalar(200);
+        canvas.addEventListener('wheel', (e) => {
+            const zoomAmount = e.deltaY * 0.05;
+            this.camera.position.z += zoomAmount;
+            this.camera.position.x += zoomAmount;
         });
     }
-    
-    updateTemperatureDisplay() {
-        document.getElementById('temp-value').textContent = `${this.climateParams.temperature.toFixed(1)}°C`;
-        
-        // Update sun appearance based on temperature
-        if (this.sun) {
-            const intensity = 0.5 + (this.climateParams.temperatureChange / 10);
-            this.sun.material.emissiveIntensity = Math.max(0.3, Math.min(1.0, intensity));
-        }
-    }
-    
-    updateProcessIndicator(process, isActive) {
-        const indicator = document.getElementById(`${process}-indicator`);
-        if (indicator) {
-            indicator.classList.toggle('active', isActive);
-        }
-    }
-    
-    updateClimateEffects() {
-        // Update condition info
-        const tempChange = this.climateParams.temperatureChange;
-        document.getElementById('current-temp').textContent = 
-            tempChange === 0 ? 'Normal temperature' :
-            tempChange > 0 ? `${tempChange.toFixed(1)}°C warmer than average` :
-            `${Math.abs(tempChange).toFixed(1)}°C cooler than average`;
-        
-        // Update other climate indicators based on temperature
-        if (tempChange > 2) {
-            document.getElementById('current-precip').textContent = 'More extreme weather patterns';
-            document.getElementById('current-ice').textContent = 'Accelerated ice cap melting';
-            document.getElementById('current-sea').textContent = 'Rising sea levels';
-        } else if (tempChange > 0) {
-            document.getElementById('current-precip').textContent = 'Slightly altered precipitation';
-            document.getElementById('current-ice').textContent = 'Gradual ice cap melting';
-            document.getElementById('current-sea').textContent = 'Slowly rising sea levels';
-        } else {
-            document.getElementById('current-precip').textContent = 'Normal precipitation';
-            document.getElementById('current-ice').textContent = 'Stable ice caps';
-            document.getElementById('current-sea').textContent = 'Stable sea level';
-        }
-    }
-    
-    updateIceCapSize() {
-        this.iceCaps.forEach(ice => {
-            const baseScale = 1 - (this.climateParams.iceMelting * 0.3);
-            ice.scale.setScalar(Math.max(0.2, baseScale));
-            ice.material.opacity = Math.max(0.3, 0.9 - this.climateParams.iceMelting * 0.3);
-        });
+
+    onWindowResize() {
+        const container = document.getElementById('simulation-container');
+        this.camera.aspect = container.clientWidth / container.clientHeight;
+        this.camera.updateProjectionMatrix();
+        this.renderer.setSize(container.clientWidth, container.clientHeight);
     }
     
     togglePlayPause() {
         this.isPlaying = !this.isPlaying;
-        const btn = document.getElementById('play-pause-btn');
-        btn.textContent = this.isPlaying ? '⏸️ Pause' : '▶️ Play';
+        document.getElementById('play-pause-btn').innerHTML = this.isPlaying ? '⏸️ Pause' : '▶️ Play';
     }
-    
+
     resetSimulation() {
-        // Reset all climate parameters
-        this.climateParams = {
-            temperature: 15,
-            temperatureChange: 0,
-            precipitationIntensity: 1.0,
-            evaporationRate: 1.0,
-            iceMelting: 0,
-            seaLevel: 0
-        };
-        
-        // Reset UI controls
-        document.getElementById('temperature-slider').value = 0;
-        document.getElementById('precipitation-slider').value = 1.0;
-        document.getElementById('evaporation-slider').value = 1.0;
-        document.getElementById('ice-melting-slider').value = 0;
-        
-        // Update displays
-        this.updateTemperatureDisplay();
-        this.updateClimateEffects();
-        this.updateIceCapSize();
-        
-        // Reset process indicators
-        document.querySelectorAll('.process-indicator').forEach(indicator => {
-            indicator.classList.remove('active');
-        });
+        // Reset params and UI
+        this.params.temperature = 15.0;
+        this.params.windSpeed = 10.0;
+        document.getElementById('temperature-slider').value = 15.0;
+        document.getElementById('wind-slider').value = 10.0;
+        document.getElementById('temp-value').textContent = '15.0°C';
+        document.getElementById('wind-value').textContent = '10 km/h';
+
+        // Reset cycle
+        this.cycleState = 'EVAPORATION';
+        this.cycleTimer = 0;
+        this.updateCycleStage();
     }
-    
-    loadClimateScenario() {
-        // Load a dramatic climate change scenario
-        this.climateParams.temperatureChange = 3.5;
-        this.climateParams.temperature = 18.5;
-        this.climateParams.precipitationIntensity = 1.5;
-        this.climateParams.evaporationRate = 1.7;
-        this.climateParams.iceMelting = 1.5;
-        
-        // Update UI controls
-        document.getElementById('temperature-slider').value = 3.5;
-        document.getElementById('precipitation-slider').value = 1.5;
-        document.getElementById('evaporation-slider').value = 1.7;
-        document.getElementById('ice-melting-slider').value = 1.5;
-        
-        // Update displays
-        this.updateTemperatureDisplay();
-        this.updateClimateEffects();
-        this.updateIceCapSize();
-        
-        // Activate process indicators
-        this.updateProcessIndicator('evaporation', true);
-        this.updateProcessIndicator('precipitation', true);
-    }
-    
-    getTerrainHeight(x, z) {
-        // Simple terrain height calculation (matches terrain generation)
-        let height = 0;
-        height += Math.sin(x * 0.1) * Math.cos(z * 0.1) * 8;
-        height += Math.sin(x * 0.05) * Math.cos(z * 0.05) * 15;
-        
-        if (Math.abs(x) < 20 && Math.abs(z) < 20) {
-            height *= 0.3;
-        }
-        
-        return Math.max(height, -2);
-    }
-    
-    updateParticles() {
-        // Update evaporation particles
-        this.particles.evaporation.forEach(system => {
-            const positions = system.geometry.attributes.position.array;
-            const { velocities, lifetimes, maxLifetime } = system.userData;
-            
-            for (let i = 0; i < positions.length; i += 3) {
-                const i1 = i / 3;
-                
-                // Update position
-                positions[i] += velocities[i] * this.climateParams.evaporationRate;
-                positions[i + 1] += velocities[i + 1] * this.climateParams.evaporationRate;
-                positions[i + 2] += velocities[i + 2] * this.climateParams.evaporationRate;
-                
-                // Update lifetime
-                lifetimes[i1] += this.animationSpeed;
-                
-                // Reset particle if lifetime exceeded
-                if (lifetimes[i1] > maxLifetime || positions[i + 1] > 25) {
-                    positions[i] = (Math.random() - 0.5) * 50;
-                    positions[i + 1] = 0.5;
-                    positions[i + 2] = (Math.random() - 0.5) * 50;
-                    lifetimes[i1] = 0;
-                }
-            }
-            
-            system.geometry.attributes.position.needsUpdate = true;
-        });
-        
-        // Update transpiration particles
-        this.particles.transpiration.forEach(system => {
-            const positions = system.geometry.attributes.position.array;
-            const { velocities, lifetimes, maxLifetime } = system.userData;
-            
-            for (let i = 0; i < positions.length; i += 3) {
-                const i1 = i / 3;
-                
-                positions[i] += velocities[i];
-                positions[i + 1] += velocities[i + 1];
-                positions[i + 2] += velocities[i + 2];
-                
-                lifetimes[i1] += this.animationSpeed;
-                
-                if (lifetimes[i1] > maxLifetime || positions[i + 1] > 20) {
-                    // Reset to tree position
-                    const treeIndex = Math.floor(Math.random() * this.trees.length);
-                    if (this.trees[treeIndex]) {
-                        positions[i] = this.trees[treeIndex].position.x + (Math.random() - 0.5) * 4;
-                        positions[i + 1] = this.trees[treeIndex].position.y + 4;
-                        positions[i + 2] = this.trees[treeIndex].position.z + (Math.random() - 0.5) * 4;
-                        lifetimes[i1] = 0;
-                    }
-                }
-            }
-            
-            system.geometry.attributes.position.needsUpdate = true;
-        });
-        
-        // Update precipitation particles
-        this.particles.precipitation.forEach(system => {
-            const positions = system.geometry.attributes.position.array;
-            const { velocities, lifetimes, maxLifetime, cloud } = system.userData;
-            
-            for (let i = 0; i < positions.length; i += 3) {
-                const i1 = i / 3;
-                
-                positions[i] += velocities[i];
-                positions[i + 1] += velocities[i + 1] * this.climateParams.precipitationIntensity;
-                positions[i + 2] += velocities[i + 2];
-                
-                lifetimes[i1] += this.animationSpeed;
-                
-                // Reset if hit ground or lifetime exceeded
-                const terrainHeight = this.getTerrainHeight(positions[i], positions[i + 2]);
-                if (lifetimes[i1] > maxLifetime || positions[i + 1] < terrainHeight + 1) {
-                    positions[i] = cloud.position.x + (Math.random() - 0.5) * 10;
-                    positions[i + 1] = cloud.position.y;
-                    positions[i + 2] = cloud.position.z + (Math.random() - 0.5) * 10;
-                    lifetimes[i1] = 0;
-                }
-            }
-            
-            system.geometry.attributes.position.needsUpdate = true;
-        });
-        
-        // Update runoff particles
-        this.particles.runoff.forEach(system => {
-            const positions = system.geometry.attributes.position.array;
-            const { velocities, lifetimes, maxLifetime } = system.userData;
-            
-            for (let i = 0; i < positions.length; i += 3) {
-                const i1 = i / 3;
-                
-                positions[i] += velocities[i];
-                positions[i + 1] += velocities[i + 1];
-                positions[i + 2] += velocities[i + 2];
-                
-                lifetimes[i1] += this.animationSpeed;
-                
-                // Reset if reached ocean or lifetime exceeded
-                const distance = Math.sqrt(positions[i] * positions[i] + positions[i + 2] * positions[i + 2]);
-                if (lifetimes[i1] > maxLifetime || distance < 5 || positions[i + 1] < 0) {
-                    const x = (Math.random() - 0.5) * 60;
-                    const z = (Math.random() - 0.5) * 60;
-                    const y = this.getTerrainHeight(x, z);
-                    
-                    positions[i] = x;
-                    positions[i + 1] = y + 0.5;
-                    positions[i + 2] = z;
-                    lifetimes[i1] = 0;
-                    
-                    // Update flow direction
-                    const flowDirection = new THREE.Vector3(-x, 0, -z).normalize();
-                    velocities[i] = flowDirection.x * 0.1;
-                    velocities[i + 2] = flowDirection.z * 0.1;
-                }
-            }
-            
-            system.geometry.attributes.position.needsUpdate = true;
-        });
-    }
-    
-    animate() {
-        requestAnimationFrame(() => this.animate());
-        
-        if (!this.isPlaying) return;
-        
-        // Update ocean waves
-        if (this.ocean && this.ocean.material.uniforms) {
-            this.ocean.material.uniforms.time.value += 0.01;
-        }
-        
-        // Animate clouds
-        this.clouds.forEach((cloud, index) => {
-            cloud.position.x += Math.sin(Date.now() * 0.0005 + index) * 0.01;
-            cloud.rotation.y += 0.001;
-        });
-        
-        // Animate sun
-        if (this.sun) {
-            const time = Date.now() * 0.0003;
-            this.sun.position.x = Math.cos(time) * 40;
-            this.sun.position.z = Math.sin(time) * 20 - 20;
-            this.sunLight.position.copy(this.sun.position);
-        }
-        
-        // Update particles
-        this.updateParticles();
-        
-        // Update process indicators based on activity
-        this.updateProcessIndicator('evaporation', this.climateParams.evaporationRate > 1.0);
-        this.updateProcessIndicator('transpiration', true);
-        this.updateProcessIndicator('condensation', true);
-        this.updateProcessIndicator('precipitation', this.climateParams.precipitationIntensity > 1.0);
-        this.updateProcessIndicator('runoff', true);
-        this.updateProcessIndicator('infiltration', true);
-        
-        // Render the scene
-        this.renderer.render(this.scene, this.camera);
-    }
-    
-    onWindowResize() {
-        const canvas = this.renderer.domElement;
-        const width = canvas.clientWidth;
-        const height = canvas.clientHeight;
-        
-        this.camera.aspect = width / height;
-        this.camera.updateProjectionMatrix();
-        this.renderer.setSize(width, height);
+
+    updateCycleStage() {
+        // Update main info text
+        const stageInfo = document.getElementById('cycle-stage-info');
+        stageInfo.textContent = this.cycleState.charAt(0) + this.cycleState.slice(1).toLowerCase();
+
+        // Update active indicators and glows
+        const allProcesses = document.querySelectorAll('.process-indicator');
+        allProcesses.forEach(p => p.classList.remove('active'));
+        document.getElementById(`${this.cycleState.toLowerCase()}-indicator`).classList.add('active');
+
+        const allInfoSections = document.querySelectorAll('.info-section');
+        allInfoSections.forEach(s => s.classList.remove('active'));
+        document.getElementById(`info-${this.cycleState.toLowerCase()}`).classList.add('active');
+
+        // Update state label glows
+        const solidLabel = document.getElementById('solid-label');
+        const liquidLabel = document.getElementById('liquid-label');
+        const gasLabel = document.getElementById('gas-label');
+
+        solidLabel.classList.toggle('glow', this.params.temperature < 0);
+        liquidLabel.classList.toggle('glow', this.cycleState === 'PRECIPITATION' || this.cycleState === 'COLLECTION');
+        gasLabel.classList.toggle('glow', this.cycleState === 'EVAPORATION' || this.cycleState === 'CONDENSATION');
     }
 }
 
-// Initialize the simulation when the page loads
-document.addEventListener('DOMContentLoaded', () => {
-    new WaterCycleSimulation();
-});
+// Helper for Three.js Water, Sky, and GLTFLoader (as they are not in the core library)
+// This is a simplified version of the necessary components.
+// In a real project, you would import these from the 'three/examples/jsm/' directory.
+
+// --- THREE.js Water (Simplified for inclusion) --- //
+THREE.Water = function (geometry, options) {
+    THREE.Mesh.call(this, geometry);
+    var scope = this;
+    options = options || {};
+    var textureWidth = options.textureWidth !== undefined ? options.textureWidth : 512;
+    var textureHeight = options.textureHeight !== undefined ? options.textureHeight : 512;
+    var clipBias = options.clipBias !== undefined ? options.clipBias : 0.0;
+    var alpha = options.alpha !== undefined ? options.alpha : 1.0;
+    var time = options.time !== undefined ? options.time : 0.0;
+    var normalSampler = options.waterNormals !== undefined ? options.waterNormals : null;
+    var sunDirection = options.sunDirection !== undefined ? options.sunDirection : new THREE.Vector3(0.70707, 0.70707, 0.0);
+    var sunColor = new THREE.Color(options.sunColor !== undefined ? options.sunColor : 0xffffff);
+    var waterColor = new THREE.Color(options.waterColor !== undefined ? options.waterColor : 0x7F7F7F);
+    var eye = options.eye !== undefined ? options.eye : new THREE.Vector3(0, 0, 0);
+    var distortionScale = options.distortionScale !== undefined ? options.distortionScale : 20.0;
+    var side = options.side !== undefined ? options.side : THREE.FrontSide;
+    var fog = options.fog !== undefined ? options.fog : false;
+    var mirrorPlane = new THREE.Plane();
+    var normal = new THREE.Vector3();
+    var mirrorWorldPosition = new THREE.Vector3();
+    var cameraWorldPosition = new THREE.Vector3();
+    var rotationMatrix = new THREE.Matrix4();
+    var lookAtPosition = new THREE.Vector3(0, 0, - 1);
+    var clipPlane = new THREE.Vector4();
+    var view = new THREE.Vector3();
+    var target = new THREE.Vector3();
+    var q = new THREE.Vector4();
+    var textureMatrix = new THREE.Matrix4();
+    var mirrorCamera = new THREE.PerspectiveCamera();
+    var renderTarget = new THREE.WebGLRenderTarget(textureWidth, textureHeight);
+    var mirrorShader = {
+        uniforms: THREE.UniformsUtils.merge([
+            THREE.UniformsLib['fog'],
+            THREE.UniformsLib['lights'],
+            {
+                'normalSampler': { value: null },
+                'mirrorSampler': { value: null },
+                'alpha': { value: 1.0 },
+                'time': { value: 0.0 },
+                'size': { value: 1.0 },
+                'distortionScale': { value: 20.0 },
+                'textureMatrix': { value: new THREE.Matrix4() },
+                'sunColor': { value: new THREE.Color(0x7F7F7F) },
+                'sunDirection': { value: new THREE.Vector3(0.70707, 0.70707, 0) },
+                'eye': { value: new THREE.Vector3() },
+                'waterColor': { value: new THREE.Color(0x555555) }
+            }
+        ]),
+        vertexShader: [
+            'uniform mat4 textureMatrix;',
+            'uniform float time;',
+            'varying vec4 mirrorCoord;',
+            'varying vec4 worldPosition;',
+            '#include <common>',
+            '#include <fog_pars_vertex>',
+            '#include <shadowmap_pars_vertex>',
+            '#include <logdepthbuf_pars_vertex>',
+            'void main() {',
+            '	mirrorCoord = modelMatrix * vec4( position, 1.0 );',
+            '	worldPosition = mirrorCoord.xyzw;',
+            '	mirrorCoord = textureMatrix * mirrorCoord;',
+            '	vec4 mvPosition =  modelViewMatrix * vec4( position, 1.0 );',
+            '	gl_Position = projectionMatrix * mvPosition;',
+            '#include <logdepthbuf_vertex>',
+            '#include <fog_vertex>',
+            '#include <shadowmap_vertex>',
+            '}'
+        ].join('\n'),
+        fragmentShader: [
+            'uniform sampler2D mirrorSampler;',
+            'uniform float alpha;',
+            'uniform float time;',
+            'uniform float size;',
+            'uniform float distortionScale;',
+            'uniform sampler2D normalSampler;',
+            'uniform vec3 sunColor;',
+            'uniform vec3 sunDirection;',
+            'uniform vec3 eye;',
+            'uniform vec3 waterColor;',
+            'varying vec4 mirrorCoord;',
+            'varying vec4 worldPosition;',
+            'vec4 getNoise( vec2 uv ) {',
+            '	vec2 uv0 = ( uv / 103.0 ) + vec2(time / 17.0, time / 29.0);',
+            '	vec2 uv1 = uv / 107.0-vec2( time / -19.0, time / 31.0 );',
+            '	vec2 uv2 = uv / vec2( 8907.0, 9803.0 ) + vec2( time / 101.0, time / 97.0 );',
+            '	vec2 uv3 = uv / vec2( 1091.0, 1021.0 ) - vec2( time / 109.0, time / -113.0 );',
+            '	vec4 noise = texture2D( normalSampler, uv0 ) +',
+            '		texture2D( normalSampler, uv1 ) +',
+            '		texture2D( normalSampler, uv2 ) +',
+            '		texture2D( normalSampler, uv3 );',
+            '	return noise * 0.5 - 1.0;',
+            '}',
+            'void sunLight( const vec3 surfaceNormal, const vec3 eyeDirection, float shiny, float spec, float diffuse, inout vec3 diffuseColor, inout vec3 specularColor ) {',
+            '	vec3 reflection = normalize( reflect( -sunDirection, surfaceNormal ) );',
+            '	float direction = max( 0.0, dot( eyeDirection, reflection ) );',
+            '	specularColor += pow( direction, shiny ) * sunColor * spec;',
+            '	diffuseColor += max( dot( sunDirection, surfaceNormal ), 0.0 ) * sunColor * diffuse;',
+            '}',
+            '#include <common>',
+            '#include <fog_pars_fragment>',
+            '#include <logdepthbuf_pars_fragment>',
+            'void main() {',
+            '#include <logdepthbuf_fragment>',
+            '	vec4 noise = getNoise( worldPosition.xz * size );',
+            '	vec3 surfaceNormal = normalize( noise.xzy * vec3( 1.5, 1.0, 1.5 ) );',
+            '	vec3 diffuseLight = vec3(0.0);',
+            '	vec3 specularLight = vec3(0.0);',
+            '	vec3 worldToEye = eye-worldPosition.xyz;',
+            '	vec3 eyeDirection = normalize( worldToEye );',
+            '	sunLight( surfaceNormal, eyeDirection, 100.0, 2.0, 0.5, diffuseLight, specularLight );',
+            '	float distance = length(worldToEye);',
+            '	float distortion = max( 0.0, -distortionScale * distance );',
+            '	vec4 mirror = texture2D( mirrorSampler, mirrorCoord.xy / mirrorCoord.w  + distortion);',
+            '	vec3 color = waterColor * diffuseLight + specularLight;',
+            '	gl_FragColor = vec4( color, alpha );',
+            '#include <tonemapping_fragment>',
+            '#include <encodings_fragment>',
+            '#include <fog_fragment>',
+            '}'
+        ].join('\n')
+    };
+    var material = new THREE.ShaderMaterial({
+        fragmentShader: mirrorShader.fragmentShader,
+        vertexShader: mirrorShader.vertexShader,
+        uniforms: THREE.UniformsUtils.clone(mirrorShader.uniforms),
+        transparent: true,
+        lights: true,
+        side: side,
+        fog: fog
+    });
+    material.uniforms['mirrorSampler'].value = renderTarget.texture;
+    material.uniforms['textureMatrix'].value = textureMatrix;
+    material.uniforms['alpha'].value = alpha;
+    material.uniforms['time'].value = time;
+    material.uniforms['normalSampler'].value = normalSampler;
+    material.uniforms['sunColor'].value = sunColor;
+    material.uniforms['waterColor'].value = waterColor;
+    material.uniforms['sunDirection'].value = sunDirection;
+    material.uniforms['distortionScale'].value = distortionScale;
+    material.uniforms['eye'].value = eye;
+    scope.material = material;
+    scope.onBeforeRender = function (renderer, scene, camera) {
+        mirrorWorldPosition.setFromMatrixPosition(scope.matrixWorld);
+        cameraWorldPosition.setFromMatrixPosition(camera.matrixWorld);
+        rotationMatrix.extractRotation(scope.matrixWorld);
+        normal.set(0, 0, 1);
+        normal.applyMatrix4(rotationMatrix);
+        view.subVectors(mirrorWorldPosition, cameraWorldPosition);
+        if (view.dot(normal) > 0) view.reflect(normal).negate();
+        view.add(mirrorWorldPosition);
+        rotationMatrix.extractRotation(camera.matrixWorld);
+        lookAtPosition.set(0, 0, - 1);
+        lookAtPosition.applyMatrix4(rotationMatrix);
+        lookAtPosition.add(cameraWorldPosition);
+        target.subVectors(mirrorWorldPosition, lookAtPosition);
+        target.reflect(normal).negate();
+        target.add(mirrorWorldPosition);
+        mirrorCamera.position.copy(view);
+        mirrorCamera.up.set(0, 1, 0);
+        mirrorCamera.up.applyMatrix4(rotationMatrix);
+        mirrorCamera.up.reflect(normal);
+        mirrorCamera.lookAt(target);
+        mirrorCamera.far = camera.far;
+        mirrorCamera.updateMatrixWorld();
+        mirrorCamera.projectionMatrix.copy(camera.projectionMatrix);
+        textureMatrix.set(0.5, 0.0, 0.0, 0.5, 0.0, 0.5, 0.0, 0.5, 0.0, 0.0, 0.5, 0.5, 0.0, 0.0, 0.0, 1.0);
+        textureMatrix.multiply(mirrorCamera.projectionMatrix);
+        textureMatrix.multiply(mirrorCamera.matrixWorldInverse);
+        mirrorPlane.setFromNormalAndCoplanarPoint(normal, mirrorWorldPosition);
+        mirrorPlane.applyMatrix4(mirrorCamera.matrixWorldInverse);
+        clipPlane.set(mirrorPlane.normal.x, mirrorPlane.normal.y, mirrorPlane.normal.z, mirrorPlane.constant);
+        var projectionMatrix = mirrorCamera.projectionMatrix;
+        q.x = (Math.sign(clipPlane.x) + projectionMatrix.elements[8]) / projectionMatrix.elements[0];
+        q.y = (Math.sign(clipPlane.y) + projectionMatrix.elements[9]) / projectionMatrix.elements[5];
+        q.z = - 1.0;
+        q.w = (1.0 + projectionMatrix.elements[10]) / projectionMatrix.elements[14];
+        clipPlane.multiplyScalar(2.0 / clipPlane.dot(q));
+        projectionMatrix.elements[2] = clipPlane.x;
+        projectionMatrix.elements[6] = clipPlane.y;
+        projectionMatrix.elements[10] = clipPlane.z + 1.0 - clipBias;
+        projectionMatrix.elements[14] = clipPlane.w;
+        eye.setFromMatrixPosition(camera.matrixWorld);
+        var currentRenderTarget = renderer.getRenderTarget();
+        var currentXrEnabled = renderer.xr.enabled;
+        var currentShadowAutoUpdate = renderer.shadowMap.autoUpdate;
+        scope.visible = false;
+        renderer.xr.enabled = false;
+        renderer.shadowMap.autoUpdate = false;
+        renderer.setRenderTarget(renderTarget);
+        renderer.state.buffers.depth.setMask(true);
+        if (renderer.autoClear === false) renderer.clear();
+        renderer.render(scene, mirrorCamera);
+        scope.visible = true;
+        renderer.xr.enabled = currentXrEnabled;
+        renderer.shadowMap.autoUpdate = currentShadowAutoUpdate;
+        renderer.setRenderTarget(currentRenderTarget);
+        var viewport = camera.viewport;
+        if (viewport !== undefined) {
+            renderer.state.viewport(viewport);
+        }
+    };
+};
+THREE.Water.prototype = Object.create(THREE.Mesh.prototype);
+THREE.Water.prototype.constructor = THREE.Water;
+
+// --- THREE.js Sky (Simplified) --- //
+THREE.Sky = function () {
+    var sky = new THREE.Mesh(
+        new THREE.BoxGeometry(1, 1, 1),
+        new THREE.ShaderMaterial({
+            uniforms: {
+                'luminance': { value: 1 },
+                'turbidity': { value: 2 },
+                'rayleigh': { value: 1 },
+                'mieCoefficient': { value: 0.005 },
+                'mieDirectionalG': { value: 0.8 },
+                'sunPosition': { value: new THREE.Vector3() },
+                'up': { value: new THREE.Vector3(0, 1, 0) }
+            },
+            vertexShader: [
+                'uniform vec3 sunPosition;',
+                'uniform float rayleigh;',
+                'uniform float turbidity;',
+                'uniform float mieCoefficient;',
+                'varying vec3 vWorldPosition;',
+                'varying vec3 vSunDirection;',
+                'varying float vSunfade;',
+                'varying vec3 vBetaR;',
+                'varying vec3 vBetaM;',
+                'varying float vSunE;',
+                'const vec3 up = vec3( 0.0, 1.0, 0.0 );',
+                'const float e = 2.71828182845904523536028747135266249775724709369995957;',
+                'const float pi = 3.141592653589793238462643383279502884197169;',
+                'const float n = 1.0003;',
+                'const float N = 2.545E25;',
+                'const float vp = 0.062;',
+                'const float K = 15.0;',
+                'const float v = 4.0;',
+                'const vec3 lambda = vec3( 680E-9, 550E-9, 450E-9 );',
+                'const vec3 K_o = vec3( 0.686, 0.678, 0.666 );',
+                'void main() {',
+                '	vWorldPosition = ( modelMatrix * vec4( position, 1.0 ) ).xyz;',
+                '	gl_Position = projectionMatrix * modelViewMatrix * vec4( position, 1.0 );',
+                '	gl_Position.z = gl_Position.w;',
+                '	vSunDirection = normalize( sunPosition );',
+                '	vSunE = sunIntensity( dot( vSunDirection, up ) );',
+                '	vSunfade = 1.0 - clamp( 1.0 - exp( ( sunPosition.y / 450000.0 ) ), 0.0, 1.0 );',
+                '	float rayleighCoefficient = rayleigh - ( 1.0 * ( 1.0 - vSunfade ) );',
+                '	vBetaR = ( 8.0 * pow( pi, 3.0 ) * pow( pow( n, 2.0 ) - 1.0, 2.0 ) * ( 6.0 + 3.0 * vp ) ) / ( 3.0 * N * pow( lambda, vec3( 4.0 ) ) * ( 6.0 - 7.0 * vp ) ) * rayleighCoefficient;',
+                '	float c = ( 0.2 * turbidity ) * 10E-18;',
+                '	vBetaM = ( 0.434 * c * pi * pow( ( 2.0 * pi ) / lambda, vec3( v - 2.0 ) ) * K_o ) * mieCoefficient;',
+                '}'
+            ].join('\n'),
+            fragmentShader: [
+                'varying vec3 vWorldPosition;',
+                'varying vec3 vSunDirection;',
+                'varying float vSunfade;',
+                'varying vec3 vBetaR;',
+                'varying vec3 vBetaM;',
+                'varying float vSunE;',
+                'uniform float luminance;',
+                'uniform float mieDirectionalG;',
+                'const float pi = 3.141592653589793238462643383279502884197169;',
+                'const float cameraHeight = 900.0;',
+                'float rayleighPhase( float cosTheta ) {',
+                '	return ( 3.0 / ( 16.0 * pi ) ) * ( 1.0 + pow( cosTheta, 2.0 ) );',
+                '}',
+                'float hgPhase( float cosTheta, float g ) {',
+                '	return ( 1.0 / ( 4.0 * pi ) ) * ( ( 1.0 - pow( g, 2.0 ) ) / pow( 1.0 - 2.0 * g * cosTheta + pow( g, 2.0 ), 1.5 ) );',
+                '}',
+                'void main() {',
+                '	vec3 direction = normalize( vWorldPosition - cameraPosition );',
+                '	float cosTheta = dot( direction, vSunDirection );',
+                '	float r = rayleighPhase( cosTheta * 0.5 + 0.5 );',
+                '	float m = hgPhase( cosTheta, mieDirectionalG );',
+                '	vec3 Fex = exp( -( vBetaR * ( cameraHeight ) + vBetaM * ( cameraHeight ) ) );',
+                '	vec3 Fs = ( vBetaR * r + vBetaM * m ) / ( vBetaR + vBetaM );',
+                '	vec3 Lin = pow( vSunE * ( ( Fs ) * ( 1.0 - Fex ) ), vec3( 1.5 ) );',
+                '	Lin *= mix( vec3( 1.0 ), pow( vSunE * ( ( Fs ) * ( 1.0 - Fex ) ), vec3( 0.5 ) ), clamp( pow( 1.0 - dot( up, vSunDirection ), 5.0 ), 0.0, 1.0 ) );',
+                '	vec3 L0 = vec3( 0.25 ) * Fex;',
+                '	vec3 color = Lin + L0;',
+                '	color *= vSunfade;',
+                '	gl_FragColor = vec4( color, 1.0 );',
+                '#include <tonemapping_fragment>',
+                '#include <encodings_fragment>',
+                '}'
+            ].join('\n'),
+            side: THREE.BackSide,
+            depthWrite: false
+        })
+    );
+    sky.material.uniforms.sunIntensity = function(dot) { return 1.0; };
+    return sky;
+};
+
+// --- THREE.js GLTFLoader (stub for dependency) --- //
+THREE.GLTFLoader = function (manager) {
+    this.manager = (manager !== undefined) ? manager : THREE.DefaultLoadingManager;
+};
+THREE.GLTFLoader.prototype = {
+    constructor: THREE.GLTFLoader,
+    load: function (url, onLoad, onProgress, onError) {
+        var scope = this;
+        var loader = new THREE.FileLoader(scope.manager);
+        loader.setPath(scope.path);
+        loader.setResponseType('arraybuffer');
+        loader.load(url, function (data) {
+            try {
+                scope.parse(data, scope.path, onLoad, onError);
+            } catch (e) {
+                if (onError) {
+                    onError(e);
+                } else {
+                    console.error(e);
+                }
+                scope.manager.itemError(url);
+            }
+        }, onProgress, onError);
+    },
+    setPath: function(value) { this.path = value; return this; },
+    parse: function() { console.error("GLTFLoader.parse() not fully implemented in this stub."); }
+};
